@@ -1,0 +1,347 @@
+  
+alter PROCEDURE script_insert (                                
+                   
+  @nome_tabela             varchar(100) = null        
+ ,@filtro                  varchar(max) = null                      
+ ,@utiliza_distinct_S_N    char(1)      = 'S'                        
+ ,@QTD_TOP                 VARCHAR(10)  = NULL                        
+ ,@utiliza_nolock_s_n      char(1)      = 'S'                 
+ ,@Gerar_com_identity_S_N  CHAR(1)      = 's'  
+ ,@help                    bit          = 0
+             
+)                                
+                                
+                                
+as                                
+begin                                
+                                
+/*                                
+Leandro Sampaio Procopio                                
+---Procedure que criar script de insert                               
+                                
+*/                                
+
+if @help = 1
+begin
+PRINT '**********************************************************************************************************' +char (13)
+     +'Procedure para cria script de insert a partir de determinada tabela do banco'+char (13)
+	 +'Descrição parametros' +char (13)
+	 +'@nome_tabela             =  Colocar o nome da tabela que deseja criar o script de insert         ' +char (13)
+	 +'Por padrão deixei um alias chamado A na tabela do parametro @nome_tabela ' +char (13)
+	 +'@filtro                  = aqui você pode colocar um filtro como where/joins, exemplo: Exec  script_insert table_name, inner join table_name_2 b on A.col1 =  b.col1  where a.col1 = x   (Caso queira pegar a tabela toda deixe como NULL, mas CUIDADO) '+char (13)
+	 +'@utiliza_distinct_S_N    = Aqui você pode colocar um DISTINCT no select que irá buscar os dados '+char (13)
+	 +'@QTD_TOP                 = Aqui você pode colocar um TOP  no select que irá buscar os dados (Caso queira toda a tabela deixe como NULL)'+char (13)
+	 +'@utiliza_nolock_s_n      = Aqui você pode especifica um WITH(NOLOCK) no select que irá buscar os dados  (S para por o hint N para não)'+char (13)
+	 +'@Gerar_com_identity_S_N  = Aqui você pode especifica se quer a coluna com auto inclmento ou não no select que irá buscar os dados (S para gerar com a coluna de identity N para não) '+char (13)
+	 +'@help                    =  Mostra uma descrição dos parametros e o objetivo da proc'
+
+return
+end
+
+declare @msg_erro varchar(250)
+if (select count('') from  sys.tables where name = isnull(@nome_tabela,'') ) =  0
+begin
+set @msg_erro = cast(object_name(@@procid)  as varchar(150)) + ', erro parametro @nome_tabela : ' + ' Tabela não existe no banco de dados'
+RAISERROR (15600,-1,-1, @msg_erro);  
+
+end
+                        
+DECLARE @DISTINCT CHAR(15), @TOP VARCHAR(10), @auto_inclemento INT                 
+                        
+SET @DISTINCT =  IIF(@utiliza_distinct_S_N =  's',' distinct ','  ')                        
+                                
+ SET @filtro =  ISNULL(@filtro,'')                         
+                         
+ set @TOP                =  IIF(@QTD_TOP IS NOT NULL, ' TOP ' + @QTD_TOP, '   ' )                         
+ SET @utiliza_nolock_s_n =  IIF(@utiliza_nolock_s_n =  's','  with(nolock) ','  ')                              
+            
+ set @auto_inclemento =  IIF(@Gerar_com_identity_S_N = 'S',1,0)            
+             
+                        
+                              
+                              
+set nocount on                                 
+                                
+if OBJECT_ID('tempdb..#aux_insert_tab_cols') is not null                                
+begin                                
+drop table #aux_insert_tab_cols                                
+                              
+end                                
+                                
+select                                 
+a.name as nome_tab                                
+, ISNULL(SUBSTRING(c.colunas, 0, LEN(c.colunas)), '') AS nome_col                                
+,iif(c.identiti is not null, 'S','N') as tem_identity                                
+,linha =  CONVERT(varchar(max),null)       
+,[schema_name] =  sche.[name]
+into #aux_insert_tab_cols                                
+from sys.tables a    
+inner join sys.objects obj
+on a.object_id  = obj.object_id
+inner join sys.schemas sche
+on  obj.[schema_id] = sche.[schema_id]  
+cross apply(                                
+select                                 
+(                                
+select     '[' + b.name+ ']'  + ', '                                
+from sys.columns b                          
+where a.object_id = b.object_id             
+AND is_identity IN( @auto_inclemento,0) 
+and b.is_computed = 0 
+order by b.column_id                                
+ FOR XML PATH('')                                   
+) as  colunas                                
+,                                
+(                                
+select distinct c.name from                                
+sys.columns c                                
+where a.object_id = c.object_id                                
+and c.is_identity = 1  
+and c.is_computed = 0 
+) as identiti                                
+                                
+) as c                                
+where a.name = @nome_tabela 
+
+                                
+       
+	   
+update a                                
+set                                
+  linha =   ''''+'insert '+ '['+a.[schema_name] +']'+'.'+'['+ nome_tab+']' + ' ' + ' ( '+  nome_col +' ) '  + ' values '+''''+ '+'                                 
+from  #aux_insert_tab_cols a                                 
+            
+UPDATE A             
+SET A.tem_identity =  'N'            
+FROM #aux_insert_tab_cols a             
+WHERE @Gerar_com_identity_S_N = 'n'            
+            
+                                
+                           
+DECLARE @AUX_SCRIPT VARCHAR(MAX)                                
+DECLARE @AUTO_INCLEMENTO_ON VARCHAR(MAX)                                
+DECLARE @AUTO_INCLEMENTO_OFF VARCHAR(MAX)                                
+                                
+                                
+                                
+SELECT                                 
+@AUX_SCRIPT = LINHA                                
+,@AUTO_INCLEMENTO_ON =  CASE WHEN tem_identity  =  's' then ''''+ 'SET IDENTITY_INSERT ' + '['+a.[schema_name] +']'+'.'+'['+ nome_tab+']' + ' ON '  + ''''   else ''''+ ' '+ '''' end                    
+,@AUTO_INCLEMENTO_OFF =  CASE WHEN tem_identity =  's' then ''''+ 'SET IDENTITY_INSERT ' + '['+a.[schema_name] +']'+'.'+'['+ nome_tab+']' + ' OFF ' + ''''  else '''' + ' '  + '''' end            
+FROM #aux_insert_tab_cols A WHERE nome_tab =  @nome_tabela                                
+                                
+                                
+                                
+IF OBJECT_ID('TEMPDB..#aux_base_fonte') IS NOT NULL                                
+BEGIN                                
+drop table #aux_base_fonte                                                  
+END                                
+                                
+                                                   
+select   b.name as nome_tabela, a.name as nome_coluna, d.DATA_TYPE as tipo_col,                                                      
+tamanho_col = case when DATA_TYPE in('int','bigint','date','datetime','smalldatetime') then '0'                                                       
+when DATA_TYPE in('char','varchar','nchar','ntext','nvarchar','xml') then convert(varchar(10),CHARACTER_MAXIMUM_LENGTH)                               
+when DATA_TYPE in('FLOAT') then  convert(varchar(10),NUMERIC_PRECISION )+','+ convert(varchar(10),d.NUMERIC_PRECISION_RADIX)       
+when DATA_TYPE in('numeric') then  convert(varchar(10),NUMERIC_PRECISION )+','+ convert(varchar(10),NUMERIC_SCALE) end                                                      
+,identiti =  case when a.is_identity =  1 then  'S' else 'N'end                                                       
+,aceita_nul  =case when a.is_nullable =  1 then 's' else 'n' end                                                      
+,id_aux =  identity(int)                                                   
+,linha = cast(null as varchar(MAX)   )                                
+,AUX_001 =   cast(null as varchar(MAX)   )                                
+,AUX_002 =   cast(null as varchar(MAX)   )                                
+,AUX_0003 =  cast(null as varchar(MAX)   )                                
+,AUX_0004 =  cast(null as varchar(MAX)   )                                
+,aux_0005 =  cast(null as varchar(MAX)   )                                
+,aux_0006 =  cast(null as varchar(MAX)   )                                
+into #aux_base_fonte                                                      
+from sys.columns  a                                                       
+inner join sys.tables b                                            
+on a.object_id =  b.object_id                                                      
+inner join INFORMATION_SCHEMA.COLUMNS d                                                      
+on b.name =  d.TABLE_NAME                                                      
+and a.name =  d.COLUMN_NAME                                                      
+where b.type =  'U'                                                      
+AND b.name  = @nome_tabela                  
+AND is_identity IN( @auto_inclemento,0)    
+and a.is_computed = 0 
+order by a.column_id asc                                                      
+                                
+                                
+UPDATE A                                
+SET                                 
+AUX_0003 = '['+ nome_coluna + '] '                                                    
+ + ' '                                                                                            
+ + ' VARCHAR (MAX) '                                               
+ + '  NULL '                                  
+ FROM #aux_base_fonte A                                 
+                             
+if OBJECT_ID('tempdb..#aux_id') is not null                                                      
+begin                                                      
+drop table #aux_id                                                      
+end                                                      
+                                                      
+                                                                        
+                                
+ update  a                     
+ set a.tamanho_col = case when  tamanho_col =  '-1'  then 'max' else '' end                                                      
+ --select *                                                       
+ from  #aux_base_fonte a                                                       
+ where tamanho_col in ('-1' ,'null')                                    
+                                          
+ UPDATE A                                
+ SET linha = 'declare ' + '@' + replace(nome_coluna,' ','_')   +  ' ' + case when tipo_col in ('smalldatetime','datetime','FLOAT') then tipo_col else  ' varchar(MAX) ' end                                
+ ,AUX_001 =  ',' + '@' + replace(nome_coluna,' ','_') + ' = ' + replace(nome_coluna,' ','_')                                
+  from  #aux_base_fonte a                                      
+                                
+                                
+                                  
+  UPDATE A                                
+  SET AUX_001  = '@' + replace(nome_coluna,' ','_') + ' = ' + replace(nome_coluna,' ','_')                                
+  --SELECT *                    
+   FROM #aux_base_fonte  A WHERE id_aux IN (SELECT MIN(id_aux) FROM #aux_base_fonte                 )                                
+                                
+                                
+                                
+   update a                                
+   set                                
+   AUX_002 =  ',' + '@' + replace(nome_coluna,' ','_')                                 
+  from  #aux_base_fonte a                                      
+                                
+                                  
+  UPDATE A                                
+  SET AUX_002  = '@' + replace(nome_coluna,' ','_')                                 
+  --SELECT *                                
+   FROM #aux_base_fonte  A WHERE id_aux IN (SELECT MIN(id_aux) FROM #aux_base_fonte                 )                                
+                                
+                                
+                                
+   update a                                
+   set                                
+    AUX_0004 =  CASE WHEN tipo_col = 'NUMERIC' THEN  ''''+'CAST(' + '''' + '+'+'@'+replace(nome_coluna,' ','_')   +'+ '+ ''''+ ' AS ' +' NUMERIC ' + '(' + tamanho_col+ '))'+''''                                
+ WHEN tipo_col = 'FLOAT' THEN + 'REPLACE(RTRIM(REPLACE(REPLACE(RTRIM(LTRIM(REPLACE(STR('+'@'+replace(nome_coluna,' ','_')+','+ tamanho_col+'), ''0'', '' ''))), '' '', ''0''),''.'','' '')),'' '',''.'')'      
+   WHEN  tipo_col IN('char','varchar','nchar','ntext','nvarchar','xml') THEN ''''+'N'+''''+' + '+ ''''''''''+ ' + '+ 'REPLACE('+'@'+replace(nome_coluna,' ','_') +','+''''''''''+','+''''''''''''''+ ')' + ' + '+''''''''''                                
+   WHEN  tipo_col IN('date') THEN ''''+'CAST(N'+''''+'+'+'''''''''' + '+'+'@'+replace(nome_coluna,' ','_') + '+' +''''''''''+ '+' +''''+ ' AS '   +  tipo_col+ ')' +''''                         
+   WHEN  tipo_col IN('smalldatetime','datetime' )                    
+   THEN ''''+'CAST(N'+''''+'+'+'''''''''' + '+'+                     
+   'LEFT(CONVERT(VARCHAR(30),'+'@'+replace(nome_coluna,' ','_') + ',121)'+',10)'                    
+   + '+' +''''+'T'+'''' +'+' +'right(CONVERT(VARCHAR(30),'+'@'+replace(nome_coluna,' ','_') +',121)'+',12)'+'+' + '''''''' +''''+ ' + '+''''+ ' AS '   +  tipo_col+ ')' +''''                                 
+   else  '@'+replace(nome_coluna,' ','_')  END                                
+   FROM #aux_base_fonte a                                 
+                                
+     UPDATE A                                
+   SET AUX_0004 = 'isnull('+AUX_0004+','+ '''NULL'''+')'                                
+   FROM  #aux_base_fonte A                  
+                   
+                                  
+                                
+   update a                                 
+   set                                 
+   AUX_0004 = ' + '+''' , '''+ ' + ' +AUX_0004                                
+   from #aux_base_fonte A                                
+   WHERE id_aux <> 1                   
+                   
+                                
+                                
+   update  a                                
+   set a.aux_0005 = case when id_aux <> 1 then   ','  +  'a.'+'['+a.nome_coluna+']' else 'a.'+'['+a.nome_coluna+']' end                                 
+   --select *                                 
+   from #aux_base_fonte a                                
+                                
+                                
+                                                      
+                                
+ UPDATE A                                
+ SET aux_0006 = 'declare ' + '@' + nome_coluna+'cursor'   +  ' ' + case when tipo_col in ('char','varchar','nvarchar','numeric') then tipo_col+'('+tamanho_col+')'                                
+ else tipo_col end                                
+  from  #aux_base_fonte a                                      
+                                
+                                  
+                                
+   IF OBJECT_ID('TEMPDB..#aux_base_fonte_001') IS NOT NULL                                
+   BEGIN                                
+   DROP TABLE #aux_base_fonte_001                                
+   END                                
+  SELECT *  INTO  #aux_base_fonte_001  FROM #aux_base_fonte                                
+  ORDER BY id_aux                                
+               
+  ------------------- Laço para montar o script dinamico de declaração de variaveis, criação do cursor dinamico, tratamento de dados para insert e  auxiliar de criação de coluna                                
+                                
+                                
+   DECLARE                                 
+   @SQL                       VARCHAR(MAX)     = ''   --                                
+  ,@CONT                      INT              =  1   --Contador do loop                  
+  ,@QTD_TAB                   INT        -- Contador de tamanho de registros da tabela auxiliar :  #aux_base_fonte_001                                
+  ,@AUX_LINHA                 VARCHAR(MAX)    --                                
+  ,@AUX_DECLARE               VARCHAR(MAX)    --Geração de variaveis dinamicamente                                 
+  ,@SQL_VAR                   VARCHAR(MAX)      = ''   --                                
+  ,@SQL_select                VARCHAR(MAX)      = ''   --auxiliar criar select que insere os dados nas variaveis para tratamento de dadlos                                
+  ,@SQL_select_002            VARCHAR(MAX)      = ''   --auxiliar criar select que insere os dados nas variaveis para tratamento de dadlos                                
+  ,@AUX_var_002               VARCHAR(MAX)      = ''   --Auxiliar para criar tabs dinamicas                                
+  ,@SQL_select_001            VARCHAR(MAX)      = ''   --Auxiliar para  mostra um gride do select                                 
+  ,@SQL_CRIAR_TEMP            NVARCHAR(MAX)     = ''  --auxiliar criar temp global                                
+  ,@SQL_CRIAR_TEMP_002        NVARCHAR(MAX)     = ''  --auxiliar criar temp global                                
+  ,@SQL_CRIAR_TEMP_inicia     NVARCHAR(max)     = ''  --auxiliar criar temp global                                
+  ,@aux_select_cursor         nvarchar(max)     = '' -- auxiliar para montar o select do cursor                                
+  ,@aux_select_cursor_002     nvarchar(max)     = '' -- auxiliar para montar o select do cursor                                
+  ,@aux_declar_var_cursor     nvarchar(max)     = ''                                 
+  ,@aux_declar_var_cursor_002 nvarchar(max)     = ''                                 
+  ,@aux_variaveis_cursor      nvarchar(max)     = ''                                 
+  ,@aux_variaveis_cursor_002  nvarchar(max)     = ''                                 
+                                
+  SELECT  @QTD_TAB=  COUNT('')FROM #aux_base_fonte_001                                
+                        
+  WHILE @CONT <= @QTD_TAB                                
+  BEGIN                                
+                                
+  SELECT @AUX_LINHA= AUX_001                                
+  , @AUX_DECLARE =  linha                    
+  , @AUX_var_002 = AUX_0004                                
+  , @SQL_CRIAR_TEMP_inicia =  AUX_0003                                 
+  ,@aux_select_cursor_002   = aux_0005                                
+  ,@aux_declar_var_cursor_002 = aux_0006                                
+  ,@aux_variaveis_cursor_002  = AUX_002                                
+  FROM #aux_base_fonte_001  WHERE id_aux = @CONT                                
+  ORDER BY id_aux ASC                                
+                                
+  set @aux_variaveis_cursor += ' ' +  @aux_variaveis_cursor_002                                
+  set @aux_declar_var_cursor += ' ' + @aux_declar_var_cursor_002                                
+  set @aux_select_cursor +=  ' ' +  @aux_select_cursor_002                                 
+  SET @SQL +=  @AUX_LINHA + '  '                                
+  SET @SQL_VAR += @AUX_DECLARE + '  '                             
+  set @SQL_select_001 +=  @AUX_var_002 + ' '                                
+  SET @SQL_CRIAR_TEMP += @SQL_CRIAR_TEMP_inicia + ' , '                                 
+                                 
+  DELETE FROM  #aux_base_fonte_001 WHERE id_aux =  @CONT                                
+  SET @CONT+= 1                                
+  END                                
+                                
+                                
+                                
+  declare @cursor_dinamico nvarchar(max)                                
+                                
+  set @cursor_dinamico  =  @SQL_VAR + space(3) +                                
+ 'declare INSERE_TEMP_GLOBAL cursor                                 
+   for select '+@DISTINCT+ @TOP  +  @aux_select_cursor + SPACE(1) + ' from '                                
+   + @nome_tabela + ' a ' + @utiliza_nolock_s_n + char(13)                                
+   + @filtro                            
+   + ' open INSERE_TEMP_GLOBAL ' + char(13)                                 
+   + ' fetch  next  from INSERE_TEMP_GLOBAL  into ' + char(13)                                
+    +@aux_variaveis_cursor + char(13)                                
+  + 'print ' + @AUTO_INCLEMENTO_ON                         
+    + '  while @@FETCH_STATUS = 0  '  + char(13)                                
+ +'BEGIN ' + char(13)                                
+ + 'PRINT   ' + @AUX_SCRIPT + ''''+ '('+'''' + '+'+ ' ' + @SQL_select_001  + '+'+  ''''+ ')'+ ''''                                
+ + ' fetch  next  from INSERE_TEMP_GLOBAL  into ' + char(13)                                
+    +@aux_variaveis_cursor + char(13)                                
+ + ' END '                                
+ + ' close  INSERE_TEMP_GLOBAL '                                
+ + 'deallocate  INSERE_TEMP_GLOBAL '                                
+  + 'print ' + @AUTO_INCLEMENTO_OFF                                
+ 
+ execute sp_executesql @stmp =  @cursor_dinamico
+       
+                
+                 
+                 
+                                             
+end
